@@ -1,0 +1,2 @@
+workflow_name, is_active, last_polled_at
+JOBP.DAILY_IPLUS_OPTUM_ACCUMS_OUTBOUND_PROCESS,y,

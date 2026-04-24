@@ -1,0 +1,2 @@
+rule_id, target_job, expected_file_count, min_size_kb
+1,JOBP.DAILY_IPLUS_OPTUM_ACCUMS_OUTBOUND_PROCESS,2,5

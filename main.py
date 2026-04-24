@@ -1,0 +1,88 @@
+import time
+from queue import Queue
+from concurrent.futures import ThreadPoolExecutor
+
+from src.api_clients import AutomicClient
+from src.processors import normalize_status, process_job
+from src.utils import read_csv, append_csv, now
+
+client = AutomicClient()
+job_queue = Queue()
+
+
+def poller():
+    workflows = read_csv(
+        "config_workflows.csv",
+        ["workflow_name", "object_type", "is_active", "last_polled_at"]
+    )
+
+    processed = read_csv(
+        "processed_runs.csv",
+        ["run_id", "workflow_name", "processed_timestamp"]
+    )
+
+    seen_run_ids = set(processed["run_id"].astype(str))
+
+    for _, wf in workflows.iterrows():
+        if not wf["is_active"]:
+            continue
+
+        executions = client.get_latest_executions(wf["workflow_name"])
+
+        for exec_row in executions:
+            run_id = str(exec_row["run_id"])
+
+            if run_id in seen_run_ids:
+                continue
+
+            job_queue.put((wf, exec_row))
+
+            append_csv("processed_runs.csv", {
+                "run_id": run_id,
+                "workflow_name": wf["workflow_name"],
+                "processed_timestamp": now()
+            })
+
+
+def worker():
+    while True:
+        wf, exec_row = job_queue.get()
+
+        run_id = exec_row["run_id"]
+        object_type = exec_row["type"]   # JOBS or JOBP
+
+        status = normalize_status(
+            exec_row["status"],
+            exec_row.get("status_text")
+        )
+
+        # Persist workflow/job execution
+        append_csv("workflow_results.csv", {
+            "run_id": run_id,
+            "workflow_name": exec_row["name"],
+            "status": status,
+            "start_time": exec_row.get("start_time"),
+            "end_time": exec_row.get("end_time")
+        })
+
+        # JOBS → process directly
+        if object_type == "JOBS":
+            process_job(
+                {"details": exec_row, "reports": {}},
+                parent_run_id=exec_row.get("parent")
+            )
+
+        # JOBP → fetch children
+        elif object_type == "JOBP":
+            children = client.get_children(run_id)
+            for child in children:
+                process_job(child, parent_run_id=run_id)
+
+        job_queue.task_done()
+
+if __name__ == "__main__":
+    with ThreadPoolExecutor(max_workers=4) as executor:
+        executor.submit(worker)
+        while True:
+            poller()
+            time.sleep(60)
