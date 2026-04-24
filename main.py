@@ -2,6 +2,10 @@ import time
 import logging
 from queue import Queue
 from concurrent.futures import ThreadPoolExecutor
+from dotenv import load_dotenv
+
+# Load environment variables
+load_dotenv()
 
 from src.api_clients import AutomicClient
 from src.processors import normalize_status, process_job
@@ -35,7 +39,11 @@ def poller():
             continue
 
         logger.info(f"Polling workflow: {wf['workflow_name']}")
-        executions = client.get_latest_executions(wf["workflow_name"])
+        try:
+            executions = client.get_latest_executions(wf["workflow_name"])
+        except Exception as e:
+            logger.error(f"Failed to get executions for {wf['workflow_name']}: {e}")
+            continue
 
         for exec_row in executions:
             run_id = str(exec_row["run_id"])
@@ -78,18 +86,28 @@ def worker():
         # JOBS → process directly
         if object_type == "JOBS":
             logger.info(f"Processing JOB: {exec_row['name']}")
-            process_job(
-                {"details": exec_row, "reports": {}},
-                parent_run_id=exec_row.get("parent")
-            )
+            try:
+                process_job(
+                    {"details": exec_row, "reports": {}},
+                    parent_run_id=exec_row.get("parent")
+                )
+            except Exception as e:
+                logger.error(f"Failed to process job {exec_row['name']}: {e}")
 
         # JOBP → fetch children
         elif object_type == "JOBP":
             logger.info(f"Processing JOBP: {exec_row['name']}, fetching children")
-            children = client.get_children(run_id)
+            try:
+                children = client.get_children(run_id)
+            except Exception as e:
+                logger.error(f"Failed to get children for run_id {run_id}: {e}")
+                continue
             for child in children:
                 logger.info(f"Processing child job: {child['details']['name']}")
-                process_job(child, parent_run_id=run_id)
+                try:
+                    process_job(child, parent_run_id=run_id)
+                except Exception as e:
+                    logger.error(f"Failed to process child job {child['details']['name']}: {e}")
 
         job_queue.task_done()
         logger.info(f"Completed processing run_id={run_id}")
