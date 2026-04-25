@@ -1,0 +1,9 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv run python -c ' *)",
+      "Bash(py -3 -c ' *)",
+      "PowerShell(Get-ChildItem \"$env:USERPROFILE\\\\.local\\\\bin\\\\uv.exe\", \"C:\\\\Windows\\\\System32\\\\uv.exe\", \"$env:USERPROFILE\\\\AppData\\\\Roaming\\\\uv\\\\bin\\\\uv.exe\" -ErrorAction SilentlyContinue | Select-Object FullName)"
+    ]
+  }
+}

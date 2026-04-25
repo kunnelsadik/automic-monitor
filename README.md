@@ -1,319 +1,202 @@
 # Automic Monitor
 
-A comprehensive monitoring and processing system for Automic workflows and jobs.
-
-## Overview
-
-Automic Monitor is a robust system designed to:
-- Poll Automic workflows for execution status
-- Process job executions and file transfers
-- Track workflow execution history in a database
-- Parse and analyze job logs
-- Apply business rules validation
-- Maintain audit trails and metrics
+Polls Automic (job scheduling platform) for workflow and job execution status, processes results, parses logs, applies business rules, and persists everything to CSV/database.
 
 ## Project Structure
 
 ```
-automic_monitor/
+automic-monitor/
 ├── src/
-│   ├── __init__.py
-│   ├── automic/              # Automic API client and integration
-│   │   ├── __init__.py
-│   │   ├── client.py         # AutomicClient class
-│   │   └── apis.py           # API endpoint functions
-│   ├── processors/           # Job and workflow processing logic
-│   │   ├── __init__.py
-│   │   ├── job_processor.py  # Job processing
-│   │   └── workflow_processor.py  # Workflow processing
-│   ├── database/             # Database utilities
-│   │   ├── __init__.py
-│   │   ├── config.py         # Database configuration
-│   │   ├── models.py         # SQLAlchemy models
-│   │   └── operations.py     # DB operations
-│   ├── utils/                # Utility functions
-│   │   ├── __init__.py
-│   │   ├── csv_utils.py      # CSV file operations
-│   │   ├── log_parser.py     # Log parsing utilities
-│   │   └── validators.py     # Data validation rules
-│   ├── config.py             # Application configuration (Pydantic)
-│   └── logger.py             # Logging setup
+│   ├── automic/
+│   │   ├── client.py         # AutomicClient — HTTP session, proxy detection, API calls
+│   │   └── apis.py           # normalize_automic_log() — cleans raw API log text
+│   ├── processors/
+│   │   └── __init__.py       # normalize_status(), process_job()
+│   ├── database/
+│   │   └── __init__.py       # (Phase 2 — DB layer placeholder)
+│   ├── utils/
+│   │   ├── csv_utils.py      # read_csv, write_csv, append_csv, now(), loader helpers
+│   │   ├── log_parser.py     # parse_job_log(), extract_file_counts(), get_error_summary()
+│   │   └── rule_engine.py    # validate_files() — file-count business rules
+│   ├── config.py             # Pydantic-settings config classes + get_config()
+│   └── logger.py             # setup_logging() from config/logging.yaml
 │
-├── config/                   # Configuration files
-│   └── logging.yaml          # Logging configuration
+├── config/
+│   └── logging.yaml          # Rotating file + console handlers
 │
-├── data/                     # Data files
-│   ├── config_workflows.csv  # Workflow configuration
-│   ├── processed_runs.csv    # Processed execution tracking
-│   └── workflow_results.csv  # Workflow execution results
+├── data/                     # Runtime CSV files (created on first run)
+│   ├── config_workflows.csv  # Workflows to monitor
+│   ├── processed_runs.csv    # Dedup tracking for seen run IDs
+│   ├── workflow_results.csv  # Per-run status records
+│   ├── job_details.csv       # Per-job detail records
+│   └── business_rules.csv    # File-count rules
 │
-├── logs/                     # Application logs
-│
-├── tests/                    # Unit and integration tests
-│   ├── __init__.py
-│   ├── test_automic_client.py
-│   ├── test_processors.py
-│   └── test_database.py
-│
-├── docs/                     # Documentation
-│   ├── setup.md              # Setup instructions
-│   ├── architecture.md       # Architecture documentation
-│   └── api.md                # API documentation
-│
-├── main.py                   # Application entry point
-├── pyproject.toml            # Project configuration
-├── requirements.txt          # Python dependencies
-├── .env.template             # Environment variables template
-└── .gitignore                # Git ignore rules
+├── tests/
+├── main.py                   # Entry point: poller thread + N worker threads
+├── pyproject.toml
+├── requirements.txt
+└── .env.template
 ```
 
-## Installation
+## Setup
 
 ### Prerequisites
-- Python 3.10 or higher
-- pip or conda
-- Virtual environment (recommended)
 
-### Setup Steps
+- Python 3.10+
+- ODBC driver for MS Access (`Microsoft Access Driver (*.mdb, *.accdb)`) if using Access DB
 
-1. **Clone or download the project**
+### Install
+
 ```bash
-cd automic_monitor
-```
+# Using uv (recommended — uv.lock is committed)
+uv sync
 
-2. **Create a virtual environment**
-```bash
-# Windows
-python -m venv .venv
-.venv\Scripts\activate
-
-# Linux/Mac
-python3 -m venv venv
-source venv/bin/activate
-```
-
-3. **Install dependencies**
-```bash
+# Or plain pip
 pip install -r requirements.txt
 ```
 
-4. **Create environment configuration**
+### Environment Variables
+
+Copy `.env.template` to `.env` and fill in values:
+
 ```bash
-# Copy the template
 cp .env.template .env
-
-# Edit .env with your configuration
-notepad .env  # Windows
-nano .env     # Linux/Mac
 ```
 
-5. **Configure required environment variables**
-```
-# Automic API
-AUTOMIC_BASE_URL=https://hpappworx01:8488/ae/api/v2
-AUTOMIC_CLIENT=3000
-AUTOMIC_USERNAME=<your_username>
-AUTOMIC_PASSWORD=<your_password>
+Required variables:
 
-# Database
-DB_CONNECTION_STRING=<your_db_connection>
+| Variable | Description |
+|---|---|
+| `AUTOMIC_BASE_URL` | e.g. `https://hpappworx01:8488/ae/api/v2` |
+| `AUTOMIC_USERNAME` | API username |
+| `AUTOMIC_PASSWORD` | API password |
+| `AUTOMIC_CLIENT_ID` | Client number (default `3000`) |
 
-# Application
-LOG_LEVEL=INFO
-POLLING_INTERVAL_SECONDS=60
-WORKER_THREADS=4
-```
+Optional:
 
-## Configuration
+| Variable | Default | Description |
+|---|---|---|
+| `AUTOMIC_TIMEOUT` | `30` | HTTP timeout in seconds |
+| `AUTOMIC_SSL_VERIFY` | `false` | Verify TLS certificates |
+| `AUTOMIC_PROXY_SERVER` | — | Override proxy (auto-detected from system if blank) |
+| `DB_CONNECTION_STRING` | — | Full ODBC connection string |
+| `DB_FILE_PATH` | — | Path to `.accdb` file (alternative to connection string) |
+| `LOG_LEVEL` | `INFO` | `DEBUG`, `INFO`, `WARNING`, `ERROR` |
+| `POLLING_INTERVAL_SECONDS` | `60` | How often to poll Automic |
+| `WORKER_THREADS` | `4` | Concurrent job processor threads |
+| `QUEUE_SIZE` | `1000` | Max items in the processing queue |
 
-Configuration is managed through:
-
-1. **Environment Variables (.env file)**
-   - API credentials
-   - Database connection strings
-   - Application settings
-
-2. **Pydantic Configuration Class (src/config.py)**
-   - Type validation
-   - Default values
-   - Runtime configuration
-
-## Usage
-
-### Running the Application
+## Running
 
 ```bash
 python main.py
 ```
 
-### Command Line Options
+On startup the app:
+1. Loads config from `.env`
+2. Starts `WORKER_THREADS` background threads
+3. Enters a polling loop — every `POLLING_INTERVAL_SECONDS` it fetches new executions for each active workflow in `data/config_workflows.csv` and queues anything not already in `data/processed_runs.csv`
+4. Workers pick up queue items, normalize status, append to CSV, and process job logs
 
-```bash
-# Verbose logging
-python main.py --log-level DEBUG
+## Architecture
 
-# Single poll run (no continuous loop)
-python main.py --once
-
-# Custom polling interval (in seconds)
-python main.py --interval 30
+```
+Poller (main thread, every N seconds)
+  │  reads config_workflows.csv
+  │  reads processed_runs.csv  →  dedup set
+  │  calls AutomicClient.get_latest_executions()
+  └──► Queue
+           │
+    Worker threads (N)
+           │  normalize_status()
+           │  append workflow_results.csv
+           ├── JOBS  → process_job()  → append job_details.csv
+           └── JOBP  → get_children() → process_job() per child
 ```
 
-### Core Components
+## Key Modules
 
-#### 1. Automic Client
+### `src/config.py`
+
+Four `BaseSettings` subclasses (`AutomicConfig`, `DatabaseConfig`, `FileProcessingConfig`, `ApplicationConfig`) aggregated under `Config`. Call `get_config()` anywhere — it's cached via `@lru_cache`.
+
+```python
+from src.config import get_config
+cfg = get_config()
+print(cfg.automic.base_url)
+print(cfg.app.worker_threads)
+```
+
+### `src/automic/client.py`
+
 ```python
 from src.automic.client import AutomicClient
+from src.config import get_config
 
-client = AutomicClient()
-executions = client.get_latest_executions("JOBP.WORKFLOW_NAME")
+client = AutomicClient(config=get_config().automic)
+executions = client.get_latest_executions("JOBP.DAILY_WORKFLOW")
+children   = client.get_children(run_id=86042036)
+logs       = client.get_job_logs(run_id="86041014", report_type="REP")
 ```
 
-#### 2. Job Processing
-```python
-from src.processors.job_processor import process_job
+Proxy is resolved in order: environment variables → `AUTOMIC_PROXY_SERVER` env var → Windows Registry / WinHTTP.
 
-process_job(job_data, parent_run_id=123)
+### `src/processors/__init__.py`
+
+```python
+from src.processors import normalize_status, process_job
+
+status = normalize_status(1900)          # "ENDED_OK"
+status = normalize_status(1800)          # "ENDED_NOT_OK"
+process_job(job_dict, parent_run_id=123) # appends to data/job_details.csv
 ```
 
-#### 3. Database Operations
-```python
-from src.database.operations import get_job_stats, update_workflow_status
+Status codes: `1900` ENDED_OK · `1800` ENDED_NOT_OK · `1801` ABORTED · `1700` WAITING · `1560` BLOCKED · `1550` ACTIVE
 
-stats = get_job_stats(job_name)
-update_workflow_status(run_id, "COMPLETED")
+### `src/utils/log_parser.py`
+
+```python
+from src.utils.log_parser import parse_job_log
+
+result = parse_job_log(log_text)
+# result["return_code"]       int or None
+# result["errors"]            list of {type, severity, retryable, line}
+# result["transfer_details"]  {command, source, destination, extension, count, transfer_ok, has_failure}
+# result["external_logs"]     list of external log paths found in the log
 ```
 
 ## Development
 
-### Code Style
-
-- **Formatting**: black (line-length: 100)
-- **Import sorting**: isort
-- **Linting**: flake8
-- **Type checking**: mypy
-
-### Running Tests
-
 ```bash
-# Install dev dependencies
-pip install -r requirements.txt -e ".[dev]"
-
-# Run tests
-pytest
-
-# With coverage
-pytest --cov=src --cov-report=html
-```
-
-### Code Quality Checks
-
-```bash
-# Format code
-black src/
+# Format
+black src/ main.py
 
 # Sort imports
-isort src/
+isort src/ main.py
 
 # Lint
-flake8 src/
+flake8 src/ main.py
 
 # Type check
 mypy src/
+
+# Tests
+pytest
+pytest --cov=src --cov-report=html
 ```
 
-## Architecture
+## Logs
 
-### Polling & Processing Flow
-
-```
-┌─────────────┐
-│   Poller    │  (Runs every 60s by default)
-│             │  - Loads active workflows
-│             │  - Fetches latest executions
-│             │  - Adds new runs to queue
-└──────┬──────┘
-       │
-       ├─→ Job Queue
-       │
-       ▼
-┌─────────────┐
-│   Worker    │  (4 threads by default)
-│ Threads     │  - Processes queue items
-│             │  - Handles JOBS and JOBP types
-│             │  - Persists results
-└─────────────┘
-```
-
-### Key Classes
-
-- **AutomicClient**: HTTP client for Automic API
-- **JobProcessor**: Processes individual job executions
-- **WorkflowProcessor**: Manages workflow-level logic
-- **DatabaseManager**: Handles all database operations
-- **RuleEngine**: Applies business rules validation
-
-## Monitoring & Logging
-
-Logs are written to:
-- Console (INFO level)
-- `logs/automic_monitor.log` (DEBUG level)
-
-Log format: `timestamp - level - message`
-
-## Database Schema
-
-The system uses MS SQL Server / Access with tables:
-- `job_stats`: Job execution statistics
-- `workflow_status`: Workflow run history
-- `job_details`: Job configuration and metadata
+- Console: `INFO` and above
+- `logs/automic_monitor.log`: `DEBUG` and above, rotating 10 MB × 5
+- `logs/automic_monitor_error.log`: `ERROR` and above, rotating 5 MB × 3
 
 ## Troubleshooting
 
-### Connection Issues
-```
-Error: Failed to get executions for WORKFLOW_NAME
-- Check AUTOMIC_BASE_URL is correct
-- Verify AUTOMIC_USERNAME and AUTOMIC_PASSWORD
-- Ensure network connectivity to Automic server
-```
+**`Failed to fetch executions`** — check `AUTOMIC_BASE_URL`, credentials, and network connectivity to the Automic server. SSL errors on internal certs are expected with `AUTOMIC_SSL_VERIFY=false`.
 
-### Database Errors
-```
-Error: Database connection failed
-- Verify DB_CONNECTION_STRING is correct
-- Check database driver is installed (pyodbc)
-- Ensure database file/server is accessible
-```
+**Proxy issues** — the client auto-detects Windows system proxy. Set `AUTOMIC_PROXY_SERVER=http://proxy:8080` to override, or set standard `HTTP_PROXY` / `HTTPS_PROXY` env vars.
 
-### File Processing Issues
-```
-Error: File not found
-- Verify SHARED_DRIVE_PATH and file paths are correct
-- Check file permissions
-```
+**Queue fills up** — increase `WORKER_THREADS` or `QUEUE_SIZE`, or reduce `POLLING_INTERVAL_SECONDS`.
 
-## Contributing
-
-Please follow these guidelines:
-1. Create a feature branch
-2. Follow code style standards (black, isort, flake8)
-3. Add tests for new functionality
-4. Update documentation
-5. Submit pull request
-
-## License
-
-MIT License - See LICENSE file for details
-
-## Support
-
-For issues or questions:
-- Check the docs/ folder for detailed documentation
-- Review logs in the logs/ folder
-- Contact the development team
-
----
-
-**Last Updated**: April 25, 2026
-**Version**: 0.2.0
+**MS Access connection** — ensure the 32-bit or 64-bit Access ODBC driver matches your Python bitness. Set either `DB_CONNECTION_STRING` (full string) or `DB_FILE_PATH` (path to `.accdb`).
