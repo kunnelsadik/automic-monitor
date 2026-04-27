@@ -93,7 +93,7 @@ def worker() -> None:
                 else:
                     for child in children:
                         try:
-                            process_job(child, parent_run_id=run_id)
+                            process_job({"details": child, "reports": {}}, parent_run_id=run_id)
                         except Exception as e:
                             name = child.get("details", {}).get("name", "?")
                             logger.error(f"Failed to process child job {name}: {e}")

@@ -1,7 +1,5 @@
 """Automic API HTTP client."""
 import logging
-import os
-import subprocess
 from typing import Any
 
 import requests
@@ -17,81 +15,11 @@ class AutomicClient:
         logger.info("Initializing AutomicClient")
         self.config = config
         self.session = requests.Session()
-        self.session.trust_env = True
         self.session.auth = HTTPBasicAuth(
             config.username, config.password.get_secret_value()
         )
         self.session.verify = config.ssl_verify
         self.session.headers.update({"Accept": "application/json"})
-
-        proxies = self._get_proxies()
-        if proxies:
-            logger.info(f"Applying proxy settings: {proxies}")
-            self.session.proxies.update(proxies)
-
-    def _parse_proxy_server(self, proxy_server: str) -> dict[str, str]:
-        proxies: dict[str, str] = {}
-        if "=" in proxy_server or ";" in proxy_server:
-            for pair in proxy_server.split(";"):
-                if not pair:
-                    continue
-                if "=" in pair:
-                    scheme, addr = pair.split("=", 1)
-                    proxies[scheme.lower()] = addr
-                else:
-                    proxies["http"] = proxies["https"] = pair
-        else:
-            proxies["http"] = proxies["https"] = proxy_server
-        return proxies
-
-    def _get_windows_proxy(self) -> dict[str, str]:
-        if os.name != "nt":
-            return {}
-
-        try:
-            import winreg
-
-            with winreg.OpenKey(
-                winreg.HKEY_CURRENT_USER,
-                r"Software\Microsoft\Windows\CurrentVersion\Internet Settings",
-            ) as reg:
-                if winreg.QueryValueEx(reg, "ProxyEnable")[0]:
-                    proxy_server = winreg.QueryValueEx(reg, "ProxyServer")[0]
-                    return self._parse_proxy_server(proxy_server)
-        except FileNotFoundError:
-            pass
-        except Exception as exc:
-            logger.debug(f"Windows Registry proxy detection failed: {exc}")
-
-        try:
-            output = subprocess.check_output(
-                ["netsh", "winhttp", "show", "proxy"],
-                text=True,
-                stderr=subprocess.DEVNULL,
-            )
-            for line in output.splitlines():
-                if "Proxy Server" in line:
-                    proxy_addr = line.split(":", 1)[1].strip()
-                    if proxy_addr and "Direct access" not in proxy_addr:
-                        return self._parse_proxy_server(proxy_addr)
-        except Exception as exc:
-            logger.debug(f"WinHTTP proxy detection failed: {exc}")
-
-        return {}
-
-    def _get_proxies(self) -> dict[str, str]:
-        proxies = {
-            k: v
-            for k, v in requests.utils.get_environ_proxies(
-                self.config.base_url or ""
-            ).items()
-            if v
-        }
-        if proxies:
-            return proxies
-        if self.config.proxy_server:
-            return self._parse_proxy_server(self.config.proxy_server)
-        return self._get_windows_proxy()
 
     def _request(self, method: str, url: str, **kwargs: Any) -> dict[str, Any]:
         try:

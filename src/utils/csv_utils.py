@@ -56,7 +56,12 @@ def append_csv(file_path: str, row_data: dict[str, Any]) -> None:
         path.parent.mkdir(parents=True, exist_ok=True)
         df_new = pd.DataFrame([row_data])
         if path.exists() and path.stat().st_size > 0:
-            df = pd.concat([pd.read_csv(file_path), df_new], ignore_index=True)
+            existing = pd.read_csv(file_path, skipinitialspace=True)
+            existing.columns = existing.columns.str.strip()
+            # Drop pandas duplicate-artifact columns (e.g. "col.1", "col.2")
+            expected = set(df_new.columns)
+            existing = existing[[c for c in existing.columns if c in expected]]
+            df = pd.concat([existing, df_new], ignore_index=True)
         else:
             df = df_new
         df.to_csv(file_path, index=False)

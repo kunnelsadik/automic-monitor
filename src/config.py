@@ -15,7 +15,6 @@ class AutomicConfig(BaseSettings):
     password: SecretStr = Field(...)
     timeout: int = Field(default=30)
     ssl_verify: bool = Field(default=False)
-    proxy_server: Optional[str] = Field(default=None)
 
     @field_validator("timeout")
     @classmethod
