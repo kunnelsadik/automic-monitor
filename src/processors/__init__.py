@@ -2,7 +2,7 @@
 import logging
 
 from src.notifications import maybe_send_alert
-from src.utils import append_csv, now
+from src.utils import append_csv, now, parse_job_log
 
 logger = logging.getLogger(__name__)
 
@@ -22,6 +22,31 @@ def normalize_status(status_code: int, status_text: str | None = None) -> str:
     status = STATUS_MAP.get(status_code, status_text or "UNKNOWN")
     logger.debug(f"Normalized status {status_code} -> {status}")
     return status
+
+
+def _fallback_summary(status_text: str, combined_log: str) -> str:
+    """Build a deterministic summary when AI is unavailable."""
+    if not combined_log.strip():
+        return f"{status_text}: No log content extracted from Automic reports."
+
+    parsed = parse_job_log(combined_log)
+    return_code = parsed.get("return_code")
+    errors = parsed.get("errors", [])
+    transfer = parsed.get("transfer_details", {})
+
+    parts = [f"{status_text}: terminal execution processed."]
+    if return_code is not None:
+        parts.append(f"RET={return_code}.")
+    if transfer.get("count") is not None:
+        parts.append(
+            f"Transfer {transfer.get('command', 'operation')} count={transfer['count']}."
+        )
+    if errors:
+        parts.append(f"Detected {len(errors)} error signal(s) in logs.")
+    else:
+        parts.append("No known error patterns detected in extracted logs.")
+
+    return " ".join(parts)
 
 
 def process_job(
@@ -57,12 +82,15 @@ def process_job(
         logger.info(f"AI summary for run_id={run_id}: {ai_summary[:80]}...")
         maybe_send_alert(job_name, run_id, status_text, ai_summary)
     elif status_text in TERMINAL_STATUSES:
+        ai_summary = _fallback_summary(status_text, combined_log)
         logger.info(
             "Skipping AI summary for run_id=%s (ai_client=%s, has_log=%s)",
             run_id,
             bool(ai_client),
             bool(combined_log.strip()),
         )
+        if status_text == "ENDED_NOT_OK":
+            maybe_send_alert(job_name, run_id, status_text, ai_summary)
     elif status_text == "ENDED_NOT_OK":
         maybe_send_alert(job_name, run_id, status_text, ai_summary or "")
 
