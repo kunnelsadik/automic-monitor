@@ -35,13 +35,34 @@ def _fetch_combined_logs(run_id: str) -> str:
     try:
         reports = client.get_available_reports(run_id)
         parts = []
+        seen_types = set()
         for report in reports:
-            rtype = report.get("type", "")
+            rtype = (
+                report.get("type")
+                or report.get("report_type")
+                or report.get("name")
+                or report.get("id")
+                or ""
+            )
             if not rtype:
                 continue
+            rtype = str(rtype).strip().upper()
+            if rtype in seen_types:
+                continue
+            seen_types.add(rtype)
             content = client.get_job_logs(run_id, rtype)
             if content:
                 parts.append(f"=== {rtype} ===\n{content}")
+
+        # Some Automic environments do not list report types reliably.
+        # Try known report types as a fallback so terminal jobs still capture logs.
+        if not parts:
+            for fallback_type in ("REP", "ACT", "PLOG", "LOG"):
+                if fallback_type in seen_types:
+                    continue
+                content = client.get_job_logs(run_id, fallback_type)
+                if content:
+                    parts.append(f"=== {fallback_type} ===\n{content}")
         return "\n\n".join(parts)
     except Exception as e:
         logger.error(f"Failed to fetch logs for run_id={run_id}: {e}")

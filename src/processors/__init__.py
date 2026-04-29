@@ -2,7 +2,7 @@
 import logging
 
 from src.notifications import maybe_send_alert
-from src.utils import append_csv
+from src.utils import append_csv, now
 
 logger = logging.getLogger(__name__)
 
@@ -33,14 +33,36 @@ def process_job(
     details = job.get("details", {})
     run_id = str(details.get("run_id", ""))
     job_name = details.get("name", run_id)
-    status_code = details.get("status")
-    status_text = STATUS_MAP.get(status_code, "UNKNOWN")
+    raw_status = details.get("status")
+    try:
+        status_code = int(raw_status) if raw_status is not None else None
+    except (TypeError, ValueError):
+        status_code = None
+    status_text = normalize_status(status_code, details.get("status_text"))
     ai_summary = None
+
+    if status_text in TERMINAL_STATUSES:
+        append_csv("data/automic_logs.csv", {
+            "run_id": run_id,
+            "parent_run_id": parent_run_id,
+            "job_name": job_name,
+            "status": status_text,
+            "log_extracted": bool(combined_log.strip()),
+            "combined_log": combined_log if combined_log.strip() else "",
+            "created_at": now(),
+        })
 
     if status_text in TERMINAL_STATUSES and ai_client and combined_log.strip():
         ai_summary = ai_client.summarize(combined_log)
         logger.info(f"AI summary for run_id={run_id}: {ai_summary[:80]}...")
         maybe_send_alert(job_name, run_id, status_text, ai_summary)
+    elif status_text in TERMINAL_STATUSES:
+        logger.info(
+            "Skipping AI summary for run_id=%s (ai_client=%s, has_log=%s)",
+            run_id,
+            bool(ai_client),
+            bool(combined_log.strip()),
+        )
     elif status_text == "ENDED_NOT_OK":
         maybe_send_alert(job_name, run_id, status_text, ai_summary or "")
 
