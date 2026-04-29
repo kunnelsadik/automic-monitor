@@ -1,15 +1,16 @@
 """Email alert notifications via SMTP."""
 import logging
+import os
 import smtplib
 from email.mime.multipart import MIMEMultipart
 from email.mime.text import MIMEText
 
 logger = logging.getLogger(__name__)
 
-_SMTP_HOST = "mail.healthpartners.org"
-_SMTP_PORT = 25
-_FROM = "EDMDINotifications@hpplans.com"
-_TO = "sreesankar2526@gmail.com"
+_SMTP_HOST = os.getenv("ALERT_SMTP_HOST", "mail.healthpartners.org")
+_SMTP_PORT = int(os.getenv("ALERT_SMTP_PORT", "25"))
+_FROM = os.getenv("ALERT_FROM_EMAIL", "")
+_TO = os.getenv("ALERT_TO_EMAIL", "")
 
 _FAILURE_KEYWORDS = {"fail", "error", "not ok", "unsuccessful", "exception", "abort", "terminated", "critical"}
 
@@ -20,6 +21,13 @@ def _summary_indicates_failure(summary: str) -> bool:
 
 
 def send_failure_alert(job_name: str, run_id: str, status: str, ai_summary: str) -> None:
+    if not _FROM or not _TO:
+        logger.warning(
+            "Alert email skipped for run_id=%s: ALERT_FROM_EMAIL or ALERT_TO_EMAIL not configured",
+            run_id,
+        )
+        return
+
     body = (
         f"Automic Job Execution Alert\n"
         f"{'=' * 40}\n"
@@ -43,6 +51,6 @@ def send_failure_alert(job_name: str, run_id: str, status: str, ai_summary: str)
 
 
 def maybe_send_alert(job_name: str, run_id: str, status: str, ai_summary: str) -> None:
-    """Send an alert email when status is ENDED_NOT_OK or the AI summary signals failure."""
-    if status == "ENDED_NOT_OK" or _summary_indicates_failure(ai_summary or ""):
+    """Send an alert email for terminal outcomes and failure-like summaries."""
+    if status in {"ENDED_OK", "ENDED_NOT_OK"} or _summary_indicates_failure(ai_summary or ""):
         send_failure_alert(job_name, run_id, status, ai_summary or "")
