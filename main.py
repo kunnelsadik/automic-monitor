@@ -7,10 +7,11 @@ from dotenv import load_dotenv
 
 load_dotenv()
 
+from src.ai import OpenAIClient
 from src.automic.client import AutomicClient
 from src.config import get_config
 from src.logger import setup_logging
-from src.processors import normalize_status, process_job
+from src.processors import TERMINAL_STATUSES, normalize_status, process_job
 from src.utils import append_csv, now
 from src.utils.csv_utils import read_csv
 
@@ -20,6 +21,31 @@ logger = logging.getLogger(__name__)
 
 client = AutomicClient(config=cfg.automic)
 job_queue: Queue = Queue(maxsize=cfg.app.queue_size)
+
+try:
+    ai_client = OpenAIClient()
+    logger.info("OpenAI client initialized")
+except Exception as e:
+    ai_client = None
+    logger.warning(f"OpenAI client unavailable — AI summaries disabled: {e}")
+
+
+def _fetch_combined_logs(run_id: str) -> str:
+    """Fetch all available report types for a run_id and combine into one string."""
+    try:
+        reports = client.get_available_reports(run_id)
+        parts = []
+        for report in reports:
+            rtype = report.get("type", "")
+            if not rtype:
+                continue
+            content = client.get_job_logs(run_id, rtype)
+            if content:
+                parts.append(f"=== {rtype} ===\n{content}")
+        return "\n\n".join(parts)
+    except Exception as e:
+        logger.error(f"Failed to fetch logs for run_id={run_id}: {e}")
+        return ""
 
 
 def poller() -> None:
@@ -62,7 +88,7 @@ def poller() -> None:
 def worker() -> None:
     logger.info("Worker thread started")
     while True:
-        wf, exec_row = job_queue.get()
+        _, exec_row = job_queue.get()
         run_id = exec_row["run_id"]
         object_type = exec_row.get("type") or exec_row.get("object_type")
 
@@ -78,9 +104,14 @@ def worker() -> None:
 
             if object_type == "JOBS":
                 try:
+                    combined_log = ""
+                    if status in TERMINAL_STATUSES:
+                        combined_log = _fetch_combined_logs(str(run_id))
                     process_job(
                         {"details": exec_row, "reports": {}},
                         parent_run_id=exec_row.get("parent"),
+                        combined_log=combined_log,
+                        ai_client=ai_client,
                     )
                 except Exception as e:
                     logger.error(f"Failed to process job {exec_row.get('name')}: {e}")
@@ -93,9 +124,20 @@ def worker() -> None:
                 else:
                     for child in children:
                         try:
-                            process_job({"details": child, "reports": {}}, parent_run_id=run_id)
+                            child_run_id = str(child.get("run_id", ""))
+                            child_status_code = child.get("status")
+                            child_status = normalize_status(child_status_code, child.get("status_text"))
+                            combined_log = ""
+                            if child_status in TERMINAL_STATUSES and child_run_id:
+                                combined_log = _fetch_combined_logs(child_run_id)
+                            process_job(
+                                {"details": child, "reports": {}},
+                                parent_run_id=run_id,
+                                combined_log=combined_log,
+                                ai_client=ai_client,
+                            )
                         except Exception as e:
-                            name = child.get("details", {}).get("name", "?")
+                            name = child.get("name", "?")
                             logger.error(f"Failed to process child job {name}: {e}")
 
         finally:

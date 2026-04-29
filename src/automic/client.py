@@ -67,11 +67,20 @@ class AutomicClient:
     def search(self, payload: dict[str, Any]) -> dict[str, Any]:
         return self.post(f"/{self.config.client_id}/search", json=payload)
 
+    def get_available_reports(self, run_id: str) -> list[dict]:
+        logger.info(f"Fetching available reports for run_id={run_id}")
+        result = self.get(f"/{self.config.client_id}/executions/{run_id}/reports")
+        if isinstance(result, list):
+            return result
+        return result.get("data", [])
+
     def get_job_logs(self, run_id: str, report_type: str = "REP") -> str:
         logger.info(f"Fetching logs for run_id={run_id} type={report_type}")
-        return self.get(
+        resp = self.get(
             f"/{self.config.client_id}/executions/{run_id}/reports/{report_type}"
-        ).get("content", "")
+        )
+        pages = resp.get("data", [])
+        return "\n".join(page.get("content", "") for page in pages)
 
     def close(self) -> None:
         self.session.close()
