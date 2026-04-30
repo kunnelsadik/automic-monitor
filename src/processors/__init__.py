@@ -2,7 +2,7 @@
 import logging
 
 from src.notifications import maybe_send_alert
-from src.utils import append_csv, parse_job_log, read_csv
+from src.utils import append_csv, parse_job_log
 
 logger = logging.getLogger(__name__)
 
@@ -49,33 +49,6 @@ def _fallback_summary(status_text: str, combined_log: str) -> str:
     return " ".join(parts)
 
 
-def _build_combined_log_from_csv(run_id: str) -> str:
-    """Build combined log for a run using persisted automic_logs.csv rows."""
-    logs_df = read_csv(
-        "data/automic_logs.csv",
-        columns=["job_run_id", "report_type", "log_content"],
-        dtypes={"job_run_id": str, "report_type": str, "log_content": str},
-    )
-    if logs_df.empty:
-        return ""
-
-    job_logs = logs_df[logs_df["job_run_id"].astype(str) == run_id]
-    if job_logs.empty:
-        return ""
-
-    parts: list[str] = []
-    for _, row in job_logs.iterrows():
-        report_type = str(row.get("report_type", "") or "").strip()
-        log_content = str(row.get("log_content", "") or "").strip()
-        if not log_content:
-            continue
-        if report_type:
-            parts.append(f"=== {report_type} ===\n{log_content}")
-        else:
-            parts.append(log_content)
-    return "\n\n".join(parts)
-
-
 def process_job(
     job: dict,
     parent_run_id: int | str,
@@ -103,21 +76,17 @@ def process_job(
                 "log_content": report.get("log_content", ""),
             })
 
-    combined_log_for_ai = ""
-    if status_text in TERMINAL_STATUSES:
-        combined_log_for_ai = _build_combined_log_from_csv(run_id)
-
-    if status_text in TERMINAL_STATUSES and ai_client and combined_log_for_ai.strip():
-        ai_summary = ai_client.summarize(combined_log_for_ai)
+    if status_text in TERMINAL_STATUSES and ai_client and combined_log.strip():
+        ai_summary = ai_client.summarize(combined_log)
         logger.info(f"AI summary for run_id={run_id}: {ai_summary[:80]}...")
         maybe_send_alert(job_name, run_id, status_text, ai_summary)
     elif status_text in TERMINAL_STATUSES:
-        ai_summary = _fallback_summary(status_text, combined_log_for_ai)
+        ai_summary = _fallback_summary(status_text, combined_log)
         logger.info(
             "Skipping AI summary for run_id=%s (ai_client=%s, has_log=%s)",
             run_id,
             bool(ai_client),
-            bool(combined_log_for_ai.strip()),
+            bool(combined_log.strip()),
         )
         if status_text == "ENDED_NOT_OK":
             maybe_send_alert(job_name, run_id, status_text, ai_summary)
