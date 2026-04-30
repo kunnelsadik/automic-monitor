@@ -30,11 +30,12 @@ except Exception as e:
     logger.warning(f"OpenAI client unavailable — AI summaries disabled: {e}")
 
 
-def _fetch_combined_logs(run_id: str) -> str:
-    """Fetch all available report types for a run_id and combine into one string."""
+def _fetch_report_logs(run_id: str) -> tuple[list[dict[str, str]], str]:
+    """Fetch logs for all report types; return rows and combined text."""
     try:
         reports = client.get_available_reports(run_id)
         parts = []
+        report_rows: list[dict[str, str]] = []
         seen_types = set()
         for report in reports:
             rtype = (
@@ -52,6 +53,7 @@ def _fetch_combined_logs(run_id: str) -> str:
             seen_types.add(rtype)
             content = client.get_job_logs(run_id, rtype)
             if content:
+                report_rows.append({"report_type": rtype, "log_content": content})
                 parts.append(f"=== {rtype} ===\n{content}")
 
         # Some Automic environments do not list report types reliably.
@@ -62,11 +64,15 @@ def _fetch_combined_logs(run_id: str) -> str:
                     continue
                 content = client.get_job_logs(run_id, fallback_type)
                 if content:
+                    report_rows.append({
+                        "report_type": fallback_type,
+                        "log_content": content,
+                    })
                     parts.append(f"=== {fallback_type} ===\n{content}")
-        return "\n\n".join(parts)
+        return report_rows, "\n\n".join(parts)
     except Exception as e:
         logger.error(f"Failed to fetch logs for run_id={run_id}: {e}")
-        return ""
+        return [], ""
 
 
 def poller() -> None:
@@ -126,12 +132,14 @@ def worker() -> None:
             if object_type == "JOBS":
                 try:
                     combined_log = ""
+                    report_logs: list[dict[str, str]] = []
                     if status in TERMINAL_STATUSES:
-                        combined_log = _fetch_combined_logs(str(run_id))
+                        report_logs, combined_log = _fetch_report_logs(str(run_id))
                     process_job(
                         {"details": exec_row, "reports": {}},
                         parent_run_id=exec_row.get("parent"),
                         combined_log=combined_log,
+                        report_logs=report_logs,
                         ai_client=ai_client,
                     )
                 except Exception as e:
@@ -149,12 +157,14 @@ def worker() -> None:
                             child_status_code = child.get("status")
                             child_status = normalize_status(child_status_code, child.get("status_text"))
                             combined_log = ""
+                            report_logs: list[dict[str, str]] = []
                             if child_status in TERMINAL_STATUSES and child_run_id:
-                                combined_log = _fetch_combined_logs(child_run_id)
+                                report_logs, combined_log = _fetch_report_logs(child_run_id)
                             process_job(
                                 {"details": child, "reports": {}},
                                 parent_run_id=run_id,
                                 combined_log=combined_log,
+                                report_logs=report_logs,
                                 ai_client=ai_client,
                             )
                         except Exception as e:
